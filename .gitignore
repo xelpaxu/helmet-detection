@@ -1,0 +1,17 @@
+backend/.venv/
+__pycache__/
+*.py[cod]
+.env
+.pytest_cache/
+backend/.cache/
+backend/data/
+frontend/node_modules/
+frontend/.next/
+frontend/.next-qa/
+frontend/.env.local
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
+frontend/.playwright-cli/
+frontend/.playwright/
+frontend/output/

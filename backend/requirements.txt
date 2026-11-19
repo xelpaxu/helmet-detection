@@ -1,0 +1,8 @@
+# Match the version recorded in the trained checkpoint.
+rfdetr==1.11.2
+ultralytics==8.4.21
+fastapi>=0.124,<1
+uvicorn[standard]>=0.33,<1
+python-multipart>=0.0.20,<1
+Pillow>=11,<13
+av>=17,<20
