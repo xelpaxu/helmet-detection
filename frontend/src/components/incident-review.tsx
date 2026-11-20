@@ -1,0 +1,41 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { Camera, Download, Film, LoaderCircle, Play, Save, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { api, API } from "@/hooks/use-detector";
+import { Incident, shortId, timecode, wallTime } from "@/lib/monitoring";
+
+export function IncidentReview({ incident, onClose, onUpdate }: { incident: Incident | null; onClose: () => void; onUpdate: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null); const player = useRef<HTMLVideoElement>(null);
+  const [notes, setNotes] = useState(""); const [status, setStatus] = useState<Incident["review_status"]>("new");
+  const [evidence, setEvidence] = useState<"entry" | "best" | "exit">("best"); const [media, setMedia] = useState<"images" | "video">("images");
+  const [imageSize, setImageSize] = useState({ width: 640, height: 360 });
+  const [busy, setBusy] = useState(false); const [clipBusy, setClipBusy] = useState(false); const [error, setError] = useState("");
+  const bounded = useRef(true); const pendingSeek = useRef<{ ms: number; play: boolean } | null>(null);
+  useEffect(() => {
+    if (incident) { dialog.current?.showModal(); setNotes(incident.notes); setStatus(incident.review_status); setEvidence("best"); setMedia("images"); setError(""); bounded.current = true; pendingSeek.current = { ms: incident.clip_start_ms, play: false }; }
+    else dialog.current?.close();
+  }, [incident?.id]);
+  const applySeek = () => { if (!player.current || !pendingSeek.current) return; const { ms, play } = pendingSeek.current; player.current.currentTime = ms / 1000; pendingSeek.current = null; if (play) void player.current.play().catch(() => undefined); else player.current.pause(); };
+  const seek = (ms: number, play = false) => { pendingSeek.current = { ms, play }; setMedia("video"); if (player.current && player.current.readyState >= 1) applySeek(); };
+  const save = async () => {
+    if (!incident) return; setBusy(true); setError("");
+    try { await api(`/api/incidents/${incident.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_status: status, notes }) }); onUpdate(); onClose(); }
+    catch { setError("Your review could not be saved. Check the connection and try again."); }
+    finally { setBusy(false); }
+  };
+  const downloadClip = async () => {
+    if (!incident) return; setClipBusy(true); setError("");
+    try { const response = await fetch(`${API}/api/incidents/${incident.id}/clip`, { signal: AbortSignal.timeout(120000) }); if (!response.ok) throw new Error(); const url = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `incident-${shortId(incident.id)}.webm`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+    catch { setError("The video clip could not be downloaded. Try again after the recording is saved."); }
+    finally { setClipBusy(false); }
+  };
+  return <dialog ref={dialog} className="review-dialog" aria-labelledby="review-title" onCancel={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    {incident && <><header className="dialog-header review-header"><div><span className="incident-mark">No helmet</span><h2 id="review-title">Incident {shortId(incident.id)}</h2></div><Button variant="ghost" size="icon" aria-label="Close incident review" onClick={onClose}><X /></Button></header>{error && <div role="alert" className="notice-bar error">{error}</div>}
+      <div className="review-layout"><div className="review-media"><div className="media-tabs"><button aria-pressed={media === "images"} onClick={() => setMedia("images")}><Camera size={18} />Saved photos</button><button aria-pressed={media === "video"} onClick={() => seek(incident.clip_start_ms)}><Film size={18} />Video playback</button></div>
+        {media === "images" ? <><div className="evidence-preview"><img src={`${API}${incident.evidence[evidence]}?v=${incident.exit_frame}`} onLoad={event => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} alt={`${evidence === "best" ? "Clearest photo" : evidence === "entry" ? "First seen" : "Last seen"} of the incident`} />{evidence === "best" && <svg className="evidence-frame-box" viewBox={`0 0 ${imageSize.width} ${imageSize.height}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x={incident.box.x1 * imageSize.width} y={incident.box.y1 * imageSize.height} width={(incident.box.x2 - incident.box.x1) * imageSize.width} height={(incident.box.y2 - incident.box.y1) * imageSize.height} vectorEffect="non-scaling-stroke" /></svg>}<span className="evidence-caption">{evidence === "entry" ? "First seen" : evidence === "best" ? "Clearest photo" : "Last seen"}<b>{timecode(evidence === "entry" ? incident.first_seen_ms : evidence === "best" ? incident.best_ms : incident.last_seen_ms, true)}</b></span></div><div className="evidence-thumbnails">{(["entry", "best", "exit"] as const).map(kind => <button key={kind} aria-pressed={kind === evidence} onClick={() => setEvidence(kind)}><img src={`${API}${incident.evidence[kind]}?v=${incident.exit_frame}`} alt="" /><span>{kind === "entry" ? "First seen" : kind === "best" ? "Clearest photo" : "Last seen"}</span></button>)}</div></> : incident.video_url ? <><div className="video-review-area"><video key={incident.session_id} ref={player} src={`${API}${incident.video_url}`} controls preload="metadata" aria-label="Incident recording" onLoadedMetadata={applySeek} onTimeUpdate={() => { if (bounded.current && player.current && player.current.currentTime >= incident.clip_end_ms / 1000) player.current.pause(); }} /></div><div className="playback-actions"><Button variant="outline" onClick={() => { bounded.current = true; seek(incident.clip_start_ms, true); }}><Play />Play incident</Button><Button variant="ghost" onClick={() => { bounded.current = false; seek(0, true); }}>Watch full recording</Button></div></> : <div className="video-pending"><Film size={36} /><h3>{incident.recording_status === "recording" ? "The camera is still recording" : incident.recording_status === "finalizing" ? "The recording is being saved" : "Video is not available"}</h3><p>{incident.recording_status === "recording" ? "Stop and save the recording to watch this incident." : "You can still review the saved photos."}</p></div>}
+        <div className="evidence-actions"><span>Person {String(incident.track_id).padStart(3, "0")}</span><Button variant="ghost" disabled={!incident.video_url || incident.state === "active" || clipBusy} onClick={() => void downloadClip()}>{clipBusy ? <LoaderCircle className="spin" /> : <Download />}Download clip</Button></div>
+      </div><aside className="review-side"><div className="incident-location"><h3>{incident.camera}</h3><p>{wallTime(incident.started_at, incident.first_seen_ms)}</p></div><h3 className="section-title">Video timeline</h3><div className="incident-timeline">{[{ name: "First seen", ms: incident.first_seen_ms }, { name: "No helmet recorded", ms: incident.confirmed_ms }, { name: "Last seen", ms: incident.last_seen_ms }].map(point => <button key={point.name} onClick={() => seek(point.ms)} disabled={!incident.video_url}><span className="timeline-dot" /><span>{point.name}<strong>{timecode(point.ms, true)}</strong></span><Play size={16} /></button>)}</div><form className="review-form" onSubmit={event => { event.preventDefault(); void save(); }}><label className="field-label" htmlFor="review-status">Review status</label><select id="review-status" className="control" value={status} onChange={event => setStatus(event.target.value as Incident["review_status"])}><option value="new">Needs review</option><option value="reviewed">Reviewed</option><option value="dismissed">Dismissed</option></select><label className="field-label" htmlFor="review-notes">Officer notes</label><textarea id="review-notes" maxLength={4000} value={notes} onChange={event => setNotes(event.target.value)} placeholder="Add your observations…" rows={3} /><Button type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Save />}Save review</Button></form></aside></div>
+    </>}
+  </dialog>;
+}
